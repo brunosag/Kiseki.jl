@@ -2,7 +2,6 @@ using Lux, MLUtils, Optimisers, Zygote, OneHotArrays, Random, Printf, Evolutiona
 using MLDatasets: MNIST
 using SimpleChains: SimpleChains
 
-
 function load_MNIST(rng; batchsize::Int)
     preprocess(data) = (
         reshape(data.features, 28, 28, 1, :),
@@ -18,7 +17,6 @@ function load_MNIST(rng; batchsize::Int)
     )
 end
 
-
 function accuracy(model, θ, s, dataloader)
     s_test = Lux.testmode(s)
     correct, total = 0, 0
@@ -32,7 +30,6 @@ function accuracy(model, θ, s, dataloader)
     return (correct / total) * 100
 end
 
-
 function Evolutionary.trace!(record::Dict{String, Any}, objfun, state, population, method::ES, options)
     best_idx = argmin(state.fitness)
     record["σ"] = copy(state.strategies[best_idx].σ)
@@ -41,12 +38,11 @@ function Evolutionary.trace!(record::Dict{String, Any}, objfun, state, populatio
     return
 end
 
-
 function train_evolution(
         model;
         rng = Random.default_rng(),
         batchsize = 2048,
-        iterations = 10000,
+        iterations = 12000,
         lossfn = CrossEntropyLoss(; logits = Val(true)),
         checkpoint_interval = 100,
         resume_file = nothing
@@ -68,35 +64,42 @@ function train_evolution(
         σ_latest = checkpoint_data["σ"]
         start_iter = checkpoint_data["i"]
         best_test_acc[] = get(checkpoint_data, "test_acc", 0.0)
+
+        if haskey(checkpoint_data, "complete_trace")
+            complete_trace = checkpoint_data["complete_trace"]
+        end
+
         @printf("Resuming from iteration %d...\n", start_iter)
     else
         θ_latest = Vector(θ_flat)
         σ_latest = fill(0.01f0, N)
     end
 
-    μ_size = 50
-    λ_size = 250
+    μ_size = 80
+    λ_size = 400
     τ = Float32(1.0 / sqrt(2.0 * sqrt(N)))
     τ′ = Float32(1.0 / sqrt(2.0 * N))
 
     train_iter = iterate(train_dataloader)
     total_blocks = (iterations - start_iter) ÷ checkpoint_interval
-
     prev_checkpoint = Ref{String}(isnothing(resume_file) ? "" : resume_file)
     current_global_iter = start_iter
+    iteration_timer = Ref(time())
+    axes = getaxes(θ_flat)
 
-    try
-        for block in 1:total_blocks
-            if train_iter === nothing
-                train_iter = iterate(train_dataloader)
-            end
-            (X_static, y_static), dataloader_state = train_iter
-            train_iter = iterate(train_dataloader, dataloader_state)
+    for block in 1:total_blocks
+        if train_iter === nothing
+            train_iter = iterate(train_dataloader)
+        end
 
+        (X_static, y_static), dataloader_state = train_iter
+        train_iter = iterate(train_dataloader, dataloader_state)
+
+        let X = X_static, y = y_static, mdl = model, st = s, ax = axes, lf = lossfn
             function objective(x)
-                θ_current = ComponentArray(x, getaxes(θ_flat))
-                ŷ, _ = model(X_static, θ_current, s)
-                return lossfn(ŷ, y_static)
+                θ_current = ComponentArray(x, ax)
+                ŷ, _ = mdl(X, θ_current, st)
+                return lf(ŷ, y)
             end
 
             function checkpoint_callback(trace_record)
@@ -106,15 +109,20 @@ function train_evolution(
 
                 global_iter = start_iter + (block - 1) * checkpoint_interval + trace_record.iteration
                 current_global_iter = global_iter
+
+                current_time = time()
+                elapsed = current_time - iteration_timer[]
+                iteration_timer[] = current_time
+
                 trace_dict = trace_record.metadata
 
-                @printf("Iter %5d \t Loss: %.6f\n", global_iter, trace_dict["L"])
+                @printf("Iter %5d \t Loss: %.6f \t Time: %.4fs\n", global_iter, trace_dict["L"], elapsed)
                 push!(complete_trace, copy(trace_dict))
 
                 if trace_record.iteration == checkpoint_interval
-                    θ_current = ComponentArray(trace_dict["θ"], getaxes(θ_flat))
-                    train_acc = accuracy(model, θ_current, s, train_dataloader)
-                    test_acc = accuracy(model, θ_current, s, test_dataloader)
+                    θ_current = ComponentArray(trace_dict["θ"], ax)
+                    train_acc = accuracy(mdl, θ_current, st, train_dataloader)
+                    test_acc = accuracy(mdl, θ_current, st, test_dataloader)
 
                     if test_acc > best_test_acc[]
                         best_test_acc[] = test_acc
@@ -125,7 +133,8 @@ function train_evolution(
                             "θ" => trace_dict["θ"],
                             "σ" => trace_dict["σ"],
                             "train_acc" => train_acc,
-                            "test_acc" => test_acc
+                            "test_acc" => test_acc,
+                            "complete_trace" => complete_trace
                         )
 
                         time_str = Dates.format(Dates.now(), "yyyy-mm-ddTHHMMSS")
@@ -177,30 +186,19 @@ function train_evolution(
             )
 
             Evolutionary.optimize(objective, Evolutionary.NoConstraints(), algo, poplt, options)
+        end
 
-            last_trace = complete_trace[end]
-            θ_latest = last_trace["θ"]
-            σ_latest = last_trace["σ"]
-        end
-    catch e
-        if e isa InterruptException
-            @printf("\n[Interrupt] Neuroevolutionary optimization halted at iteration %d. Executing finishing steps...\n", current_global_iter)
-        else
-            rethrow(e)
-        end
+        last_trace = complete_trace[end]
+        θ_latest = last_trace["θ"]
+        σ_latest = last_trace["σ"]
     end
-
-    serialize("neuroevolution_complete_trace.jls", complete_trace)
 
     θ_best = ComponentArray(θ_latest, getaxes(θ_flat))
     train_acc = accuracy(model, θ_best, s, train_dataloader)
     test_acc = accuracy(model, θ_best, s, test_dataloader)
 
-    @printf "\nFinal Training Accuracy: %.2f%% \t Test Accuracy: %.2f%%\n" train_acc test_acc
-
     return θ_best, complete_trace
 end
-
 
 model = ToSimpleChainsAdaptor((28, 28, 1))(
     Chain(
