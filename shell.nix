@@ -5,6 +5,8 @@ pkgs.mkShell {
 
   buildInputs = with pkgs; [
     julia-bin
+    pprof
+    graphviz
   ];
 
   shellHook = ''
