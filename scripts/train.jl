@@ -1,5 +1,5 @@
 using Pkg; Pkg.activate(joinpath(@__DIR__, ".."))
-using Kiseki, Random, ArgParse
+using Kiseki, Random, ArgParse, LuxCUDA
 
 
 function parse_commandline()
