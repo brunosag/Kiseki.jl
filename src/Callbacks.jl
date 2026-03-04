@@ -36,9 +36,7 @@ function (cb::CheckpointCallback)(
 
     push!(cb.complete_trace, (i = global_i, L = L, σ = σ))
 
-    if cb.verbose
-        @printf("i = %-*d \t L(𝛉) = %.6f \t Δt = %.2fs \t σ = %.5f\n", ndigits(cb.I), global_i, L, elapsed, σ)
-    end
+    base_log = @sprintf("i = %-*d      L(𝛉) = %.6f      Δt = %.2fs      σ = %.5f", ndigits(cb.I), global_i, L, elapsed, σ)
 
     if global_i % cb.checkpoint_Δi == 0
         θ_current = ComponentArray(θ, cb.axes)
@@ -62,11 +60,23 @@ function (cb::CheckpointCallback)(
             )
 
             save_checkpoint(checkpoint_data, test_acc, global_i, cb.prev_checkpoint, cb.save_dir, cb.prefix)
-            @printf("[Checkpoint Saved]   i = %-*d        L(𝛉) = %.6f        Accuracy = %.2f%%\n%s", ndigits(cb.I), global_i, L, test_acc * 100.0, cb.verbose ? "\n" : "")
+
+            acc_str = @sprintf("Accuracy = %.2f%%", test_acc * 100.0)
         else
-            @printf("[Skipped Checkpoint] i = %-*d        L(𝛉) = %.6f        Accuracy = %.2f%% (Best: %.2f%%)\n%s", ndigits(cb.I), global_i, L, test_acc * 100.0, cb.best_test_acc * 100.0, cb.verbose ? "\n" : "")
+            acc_str = @sprintf("Accuracy = %.2f%% (Best: %.2f%%)", test_acc * 100.0, cb.best_test_acc * 100.0)
+        end
+
+        if cb.verbose
+            println(base_log, "  [", acc_str, "]")
+        else
+            println(base_log, "      ", acc_str)
+        end
+    else
+        if cb.verbose
+            println(base_log)
         end
     end
+
     return false
 end
 
