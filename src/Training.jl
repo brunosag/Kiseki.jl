@@ -1,6 +1,6 @@
 module Training
 
-using Lux, Random, Printf, ComponentArrays, Statistics, Optimisers, Zygote
+using Lux, Random, Printf, ComponentArrays, Statistics, Optimisers, Zygote, LuxCUDA
 using ..Data: load_MNIST
 using ..Evaluation: accuracy
 using ..Checkpoints: load_checkpoint
@@ -225,6 +225,11 @@ function train_evolution(
 
         es_state = (pop_parents = pop_parents, str_parents = str_parents, fitness_parents = fitness_parents, θ_avg = θ_avg, σ_avg = σ_avg)
         cb_state(i, θ_avg, fitness_parents[1], σ_avg, es_state)
+
+        if i % 1000 == 0
+            GC.gc(true)
+            LuxCUDA.CUDA.reclaim()
+        end
     end
 
     return cb_state.complete_trace

@@ -50,12 +50,10 @@ function main()
             save_dir = checkpoint_dir,
         )
     elseif mode == "gradient"
-        config = GradientConfig(α = 3.0f-4, epochs = 200, batchsize = 128)
         return train_gradient(
             model;
-            config = config,
+            config = GradientConfig(),
             rng = rng,
-            checkpoint_Δi = 100,
             resume_file = resume_target,
             save_dir = checkpoint_dir,
         )
