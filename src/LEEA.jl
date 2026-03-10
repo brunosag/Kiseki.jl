@@ -22,18 +22,36 @@ const logitcrossentropy = Lux.CrossEntropyLoss(; logits = Val(true))
     γᵢ::Float32 = 0.2   # fitness inheritance decay
 end
 
-function mutate!(O, P, as_idx, U₁, U₂, rngs, r, m)
-    return @batch for i in 1:length(as_idx)
+function mutate!(O, P, as_idx, rngs, U₁, U₂, Nₐ, r, m)
+    return @batch for i in 1:Nₐ
         tid = threadid()
-        u₁ = @view U₁[:, tid]
-        u₂ = @view U₂[:, tid]
+        u₁ = U₁[tid]
+        u₂ = U₂[tid]
 
         rand!(rngs[tid], u₁)
         rand!(rngs[tid], u₂)
 
-        p_idx = as_idx[i]
+        p = as_idx[i]
 
-        @. O[:, i] = P[:, p_idx] + (u₁ < r) * m * (2.0f0 * u₂ - 1.0f0)
+        @. O[:, i] = P[:, p] + (u₁ < r) * m * (2.0f0 * u₂ - 1.0f0)
+    end
+end
+
+function reproduce!(O, P, wheel_idx, wheel_w, rngs, U, Nₛ, Nₐ)
+    return @batch for i in 1:Nₛ
+        tid = threadid()
+        u = U[tid]
+
+        rand!(rngs[tid], u)
+
+        p₁ = sample(rngs[tid], wheel_idx, wheel_w)
+        p₂ = sample(rngs[tid], wheel_idx, wheel_w)
+
+        while p₁ == p₂
+            p₂ = sample(rngs[tid], wheel_idx, wheel_w)
+        end
+
+        @. O[:, Nₐ + i] = ifelse(u < 0.5f0, P[:, p₁], P[:, p₂])
     end
 end
 
@@ -52,11 +70,13 @@ function train_LEEA(; seed::Int, batchsize::Int, generations::Int)
     P = stack(Vector(Lux.initialparameters(rng, model).params) for _ in 1:N)
     O = similar(P)
 
-    f = Vector{Float32}(undef, N)
+    Nₛ = round(Int, s * N)
+    Nₐ = N - Nₛ
 
-    num_as = round(Int, (1 - s) * N)
-    U₁ = Matrix{Float32}(undef, θ_len, num_as)
-    U₂ = Matrix{Float32}(undef, θ_len, num_as)
+    f = Vector{Float32}(undef, N)
+    U₁ = [Vector{Float32}(undef, θ_len) for _ in 1:n_threads]
+    U₂ = [Vector{Float32}(undef, θ_len) for _ in 1:n_threads]
+    Uₛ = [Vector{Float32}(undef, θ_len) for _ in 1:n_threads]
 
     for i in 1:generations
         X, Y = popfirst!(train_dataloader)
@@ -70,12 +90,13 @@ function train_LEEA(; seed::Int, batchsize::Int, generations::Int)
         wheel_idx = partialsortperm(f, 1:round(Int, pₛ * N), rev = true)
         wheel_w = Weights(@view f[wheel_idx])
 
-        as_idx = sample(rng, wheel_idx, wheel_w, num_as)
+        as_idx = sample(rng, wheel_idx, wheel_w, Nₐ)
 
-        mutate!(O, P, as_idx, U₁, U₂, rngs, r, m)
+        mutate!(O, P, as_idx, rngs, U₁, U₂, Nₐ, r, m)
+        reproduce!(O, P, wheel_idx, wheel_w, rngs, Uₛ, Nₛ, Nₐ)
+
         m *= γₘ
-
-        @show O[1:10, 1]
+        P, O = O, P
     end
 
     return
