@@ -1,12 +1,13 @@
 module LEEA
 
 import Lux
+using CUDA
+using LuxCUDA
 using Printf
 using Random: Xoshiro, rand!
-using Polyester: @batch
 using StatsBase: Weights, sample, sample!
-using Base.Threads: nthreads, threadid
 using OneHotArrays: onecold
+using Optimisers: destructure
 using ..Data: load_MNIST
 using ..Models: CNN_2C2D_MNIST
 
@@ -15,7 +16,7 @@ export train_LEEA
 const logitcrossentropy = Lux.CrossEntropyLoss(; logits = Val(true))
 
 @kwdef struct LEEAConfig
-    N::Int = 1000       # population size
+    N::Int = 200        # population size
     r::Float32 = 0.04   # mutation rate
     m::Float32 = 0.03   # mutation power
     γₘ::Float32 = 0.99  # mutation power decay
@@ -24,15 +25,16 @@ const logitcrossentropy = Lux.CrossEntropyLoss(; logits = Val(true))
     d::Float32 = 0.2    # fitness inheritance decay
 end
 
-function evaluate_population!(fₚ, fₒ, model, P, X, Y, st, pₐ, p₁, p₂, N, Nₐ, d, gen)
+function evaluate_population!(fₚ, fₒ, model, P, X, Y, st, pₐ, p₁, p₂, N, Nₐ, d, gen, re)
     d′ = 1.0f0 - d
     half_d′ = 0.5f0 * d′
     is_first_gen = gen == 1
 
-    return @batch for j in 1:N
-        θⱼ = NamedTuple{(:params,)}((@view(P[:, j]),))
-        Ŷ, _ = model(X, θⱼ, st)
-        f = 1.0f0 / (1.0f0 + logitcrossentropy(Ŷ, Y))
+    for j in 1:N
+        θ = re(@view(P[:, j]))
+        Ŷ, _ = model(X, θ, st)
+        loss = logitcrossentropy(Ŷ, Y)
+        f = 1.0f0 / (1.0f0 + Float32(loss))
 
         if is_first_gen
             fₒ[j] = f
@@ -42,6 +44,7 @@ function evaluate_population!(fₚ, fₒ, model, P, X, Y, st, pₐ, p₁, p₂, 
             fₒ[j] = (fₚ[p₁[j - Nₐ]] + fₚ[p₂[j - Nₐ]]) * half_d′ + f
         end
     end
+    return
 end
 
 function select_parents!(fₒ, pₐ, p₁, p₂, rng, N, p)
@@ -61,66 +64,64 @@ function select_parents!(fₒ, pₐ, p₁, p₂, rng, N, p)
     return
 end
 
-function reproduce_assexual!(O, P, pₐ, U₁, U₂, rngs, Nₐ, r, m)
-    return @batch for j in 1:Nₐ
-        tid = threadid()
-        u₁ = U₁[tid]
-        u₂ = U₂[tid]
-        pⱼ = pₐ[j]
+function reproduce_assexual!(O, P, pₐ, Nₐ, r, m)
+    pₐ_gpu = CuArray(pₐ)
 
-        rand!(rngs[tid], u₁)
-        rand!(rngs[tid], u₂)
+    u₁ = CUDA.rand(Float32, size(P, 1), Nₐ)
+    u₂ = CUDA.rand(Float32, size(P, 1), Nₐ)
 
-        @. O[:, j] = P[:, pⱼ] + (u₁ < r) * m * (2.0f0 * u₂ - 1.0f0)
-    end
+    @views O[:, 1:Nₐ] .= P[:, pₐ_gpu] .+ (u₁ .< r) .* m .* (2.0f0 .* u₂ .- 1.0f0)
+    return
 end
 
-function reproduce_sexual!(O, P, p₁, p₂, U, rngs, Nₛ, Nₐ)
-    return @batch for j in 1:Nₛ
-        tid = threadid()
-        u = U[tid]
-        p₁ⱼ = p₁[j]
-        p₂ⱼ = p₂[j]
+function reproduce_sexual!(O, P, p₁, p₂, Nₛ, Nₐ)
+    p₁_gpu = CuArray(p₁)
+    p₂_gpu = CuArray(p₂)
 
-        rand!(rngs[tid], u)
+    u = CUDA.rand(Float32, size(P, 1), Nₛ)
 
-        @. O[:, Nₐ + j] = ifelse(u < 0.5f0, P[:, p₁ⱼ], P[:, p₂ⱼ])
-    end
+    @views O[:, (Nₐ + 1):end] .= ifelse.(u .< 0.5f0, P[:, p₁_gpu], P[:, p₂_gpu])
+    return
 end
 
-function evaluate_best(fₒ, P, st, model, dataloader, gen)
+function evaluate_best(fₒ, P, st, model, dataloader, dev, gen, re)
     best_idx = argmax(fₒ)
-    θ = NamedTuple{(:params,)}((@view(P[:, best_idx]),))
+    θ = re(@view(P[:, best_idx]))
+
     correct, total = 0, 0
 
     for (X, Y) in dataloader
-        Ŷ, _ = model(X, θ, st)
+        X_gpu = X |> dev
+        Y_gpu = Y |> dev
 
-        correct += sum(onecold(Array(Ŷ)) .== onecold(Y))
+        Ŷ, _ = model(X_gpu, θ, st)
+
+        correct += sum(onecold(Array(Ŷ)) .== onecold(Array(Y_gpu)))
         total += size(Y, 2)
     end
 
     acc = (correct / total) * 100.0
-    @printf "i = %i        Accuracy = %.2f\n" gen acc
+    @printf "i = %i        Accuracy = %.2f%%\n" gen acc
 
     return
 end
 
-function train_LEEA(; seed::Int, batchsize::Int, generations::Int)
+function train_LEEA(; seed::Int = 42, batchsize::Int = 1000, generations::Int = 900000)
     (; N, r, m, γₘ, p, s, d) = LEEAConfig()
 
-    n_threads = nthreads()
     rng = Xoshiro(seed)
-    rngs = [Xoshiro(seed + t) for t in 1:n_threads]
+    dev = Lux.gpu_device()
 
     train_dataloader, test_dataloader = load_MNIST(; rng, batchsize, balanced = true)
     model = CNN_2C2D_MNIST
 
-    _, st = Lux.setup(rng, model)
+    θ, st = Lux.setup(rng, model)
+    st = st |> dev
     st = Lux.testmode(st)
-    θ_len = Lux.parameterlength(model)
+    θ_flat, re = destructure(θ)
+    θ_len = length(θ_flat)
 
-    P = stack(Vector(Lux.initialparameters(rng, model).params) for _ in 1:N)
+    P = stack([destructure(Lux.initialparameters(rng, model))[1] for _ in 1:N]) |> dev
     O = similar(P)
 
     Nₛ = round(Int, s * N)
@@ -129,17 +130,16 @@ function train_LEEA(; seed::Int, batchsize::Int, generations::Int)
     alloc(T, n) = Vector{T}(undef, n)
     fₚ, fₒ = alloc(Float32, N), alloc(Float32, N)
     pₐ, p₁, p₂ = alloc(Int, Nₐ), alloc(Int, Nₛ), alloc(Int, Nₛ)
-    Uₛ, U₁, U₂ = ntuple(_ -> [alloc(Float32, θ_len) for _ in 1:n_threads], 3)
 
     for i in 1:generations
-        X, Y = popfirst!(train_dataloader)
+        X, Y = popfirst!(train_dataloader) |> dev
 
-        evaluate_population!(fₚ, fₒ, model, P, X, Y, st, pₐ, p₁, p₂, N, Nₐ, d, i)
+        evaluate_population!(fₚ, fₒ, model, P, X, Y, st, pₐ, p₁, p₂, N, Nₐ, d, i, re)
         select_parents!(fₒ, pₐ, p₁, p₂, rng, N, p)
-        reproduce_assexual!(O, P, pₐ, U₁, U₂, rngs, Nₐ, r, m)
-        reproduce_sexual!(O, P, p₁, p₂, Uₛ, rngs, Nₛ, Nₐ)
+        reproduce_assexual!(O, P, pₐ, Nₐ, r, m)
+        reproduce_sexual!(O, P, p₁, p₂, Nₛ, Nₐ)
 
-        evaluate_best(fₒ, P, st, model, test_dataloader, i)
+        evaluate_best(fₒ, P, st, model, test_dataloader, dev, i, re)
 
         m *= γₘ
         P, O = O, P
