@@ -1,6 +1,7 @@
 module leea
 
 import Lux
+using Printf
 using Random: AbstractRNG, rand!
 using Optimisers: destructure
 using StatsBase: Weights, sample, sample!
@@ -161,7 +162,7 @@ function step!(opt::LEEA, ops::LEEAState, re, model, st, X, Y, rng)
     ops.P, ops.O = ops.O, ops.P
     ops.fₚ, ops.fₒ = ops.fₒ, ops.fₚ
 
-    return best_loss
+    return best_loss, @sprintf("m = %.4f", ops.m)
 end
 
 end
