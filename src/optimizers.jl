@@ -1,13 +1,20 @@
 module optimizers
 
 export AbstractOptimizer, AbstractOptimizerState
-export LEEA, LEEAState, init, step!
+export LEEA, LEEAState
+export SGD, SGDState
+export init, step!
 
 abstract type AbstractOptimizer end
 abstract type AbstractOptimizerState end
 
-include("optimizers/leea.jl")
+function init end
+function step! end
 
-using .leea: LEEA, LEEAState, init, step!
+include("optimizers/leea.jl")
+include("optimizers/sgd.jl")
+
+using .leea: LEEA, LEEAState
+using .sgd: SGD, SGDState
 
 end

@@ -1,12 +1,12 @@
 module leea
 
 import Lux
+import ..optimizers: AbstractOptimizer, AbstractOptimizerState, init, step!
 using Printf
 using Random: AbstractRNG, rand!
 using Optimisers: destructure
 using StatsBase: Weights, sample, sample!
 using OneHotArrays: onecold
-using ..optimizers
 
 export LEEA, LEEAState, init, step!
 
@@ -139,16 +139,6 @@ function reproduce_sexual!(ops::LEEAState)
     return
 end
 
-function evaluate_individual(θ, model, st, val_set)
-    X, Y = val_set
-    Ŷ, _ = model(X, θ, st)
-
-    correct = sum(onecold(Array(Ŷ), 0:9) .== Y)
-    total = length(Y)
-
-    return (correct / total) * 100.0
-end
-
 function update_patience!(opt::LEEA, ops::LEEAState, acc, best_acc)
     if acc > best_acc
         ops.pat = 0
@@ -164,7 +154,7 @@ function update_patience!(opt::LEEA, ops::LEEAState, acc, best_acc)
 end
 
 function step!(
-        opt::LEEA, ops::LEEAState, re, model, st, X, Y, rng, best_acc, val_set
+        opt::LEEA, ops::LEEAState, re, model, st, X, Y, rng, best_acc, val_set, evaluate
     )
     best_loss, best_θ = evaluate_fitness!(opt, ops, re, model, st, X, Y)
 
@@ -173,7 +163,7 @@ function step!(
     reproduce_assexual!(opt, ops)
     reproduce_sexual!(ops)
 
-    acc = evaluate_individual(best_θ, model, st, val_set)
+    acc = evaluate(best_θ, model, st, val_set)
 
     update_patience!(opt, ops, acc, best_acc)
 

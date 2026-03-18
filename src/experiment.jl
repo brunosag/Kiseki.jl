@@ -6,6 +6,7 @@ using LuxCUDA
 using Printf
 using Random: AbstractRNG, Xoshiro, TaskLocalRNG
 using Optimisers: destructure
+using OneHotArrays: onecold
 import ..optimizers: init
 using ..optimizers
 using ..models
@@ -18,7 +19,7 @@ export Experiment, ExperimentState, init, run
     batchsize::Int = 500
     max_i::Int = 500000
     target_acc::Float64 = 100.0
-    opt::AbstractOptimizer = LEEA()
+    opt::AbstractOptimizer = SGD()
 end
 
 mutable struct ExperimentState
@@ -43,6 +44,16 @@ function init(exp::Experiment, model, dev)
     return ExperimentState(rng, ops, train_loader, val_set, test_loader, best_acc, i)
 end
 
+function evaluate(θ, model, st, val_set)
+    X, Y = val_set
+    Ŷ, _ = model(X, θ, st)
+
+    correct = sum(onecold(Array(Ŷ), 0:9) .== Y)
+    total = length(Y)
+
+    return (correct / total) * 100.0
+end
+
 function run(exp::Experiment; est::Union{ExperimentState, Nothing} = nothing)
     dev = Lux.gpu_device()
     model = CNN_2C2D_MNIST
@@ -57,10 +68,10 @@ function run(exp::Experiment; est::Union{ExperimentState, Nothing} = nothing)
         t₀ = time()
         X, Y = popfirst!(est.train_loader) |> dev
 
-        L, acc, etc = step!(exp.opt, est.ops, re, model, st, X, Y, est.rng, est.best_acc, est.val_set)
+        L, acc, etc = step!(exp.opt, est.ops, re, model, st, X, Y, est.rng, est.best_acc, est.val_set, evaluate)
 
         Δt = time() - t₀
-        base_log = @sprintf "i = %-*d      Δt = %.2fs      L = %.4f      %s      Acc. = %-*.2f%%" ndigits(exp.max_i) est.i Δt L etc 5 acc
+        base_log = @sprintf "i = %-*d      Δt = %.2fs      L = %.4f      %sAcc. = %-*.2f%%" ndigits(exp.max_i) est.i Δt L (isnothing(etc) ? (etc + "      ") : "") 5 acc
 
         if acc > est.best_acc
             println(base_log)

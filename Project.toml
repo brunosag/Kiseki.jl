@@ -3,6 +3,7 @@ uuid = "cd16c4a7-7234-490f-91f6-e19d5c427514"
 version = "0.1.0"
 
 [deps]
+ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
 ArgParse = "c7e460c6-2fb9-53a9-8c5b-16f535851c63"
 BatchedRoutines = "a9ab73d0-e05c-5df1-8fde-d6a4645b8d8e"
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
@@ -37,6 +38,7 @@ WeightInitializers = "d49dbf32-c5c2-4618-8acc-27bb2598ef2d"
 Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [compat]
+ADTypes = "1.21.0"
 BatchedRoutines = "0.2.2"
 BenchmarkTools = "1.6.3"
 CUDA = "5.9.7"
