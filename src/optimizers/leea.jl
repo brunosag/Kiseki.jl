@@ -167,3 +167,5 @@ function update_scheduler!(opt::LEEA, ops, acc, best_acc)
     end
     return
 end
+
+format_metrics(ops::LEEAState) = @sprintf("      m = %.4f", ops.m)

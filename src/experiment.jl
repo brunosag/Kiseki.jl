@@ -86,7 +86,8 @@ function run(exp, est = nothing)
         update_scheduler!(exp.opt, est.ops, acc, est.best_acc)
 
         Δt = time() - t₀
-        base_log = @sprintf("i = %-*d      Δt = %.2fs      L = %.4f      Acc. = %-*.2f%%", ndigits(exp.max_i), est.i, Δt, L, 5, acc)
+        opt_metrics = format_metrics(est.ops)
+        base_log = @sprintf("i = %-*d      Δt = %.2fs      L = %.4f%s      Acc. = %-*.2f%%", ndigits(exp.max_i), est.i, Δt, L, opt_metrics, 5, acc)
 
         if acc > est.best_acc
             println(base_log)

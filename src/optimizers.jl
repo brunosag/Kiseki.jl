@@ -3,3 +3,4 @@ abstract type AbstractOptimizerState end
 
 init_workspace(opt::AbstractOptimizer, ops) = nothing
 update_scheduler!(opt::AbstractOptimizer, ops, acc, best_acc) = nothing
+format_metrics(ops::AbstractOptimizerState) = ""
