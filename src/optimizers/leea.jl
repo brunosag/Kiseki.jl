@@ -39,22 +39,28 @@ function init(opt::LEEA, model, dev, rng)
     return LEEAState(re, P, O, fₚ, fₒ, pₐ, p₁, p₂, opt.m₀, 0, true)
 end
 
-function evaluate_fitness!(opt::LEEA, ops::LEEAState, model, st, X, Y)
-    best_loss = Inf32
+@inline function evaluate_individual!(ops::LEEAState, model, st, X, Y, j::Int)
+    θ = ops.re(@view ops.P[:, j])
+    Ŷ, _ = model(X, θ, st)
+    L = Float32(logitcrossentropy(Ŷ, Y))
+    ops.fₒ[j] = 1.0f0 / (1.0f0 + L)
+    return
+end
 
+function evaluate_fitness!(opt::LEEA, ops::LEEAState{<:Matrix}, model, st, X, Y)
     Threads.@threads for j in 1:opt.N
-        θ = ops.re(@view ops.P[:, j])
-        Ŷ, _ = model(X, θ, st)
-        L = Float32(logitcrossentropy(Ŷ, Y))
-
-        if L < best_loss
-            best_loss = L
-        end
-
-        ops.fₒ[j] = 1.0f0 / (1.0f0 + L)
+        evaluate_individual!(ops, model, st, X, Y, j)
     end
 
-    return best_loss
+    return (1.0f0 / maximum(ops.fₒ)) - 1.0f0
+end
+
+function evaluate_fitness!(opt::LEEA, ops::LEEAState, model, st, X, Y)
+    for j in 1:opt.N
+        evaluate_individual!(ops, model, st, X, Y, j)
+    end
+
+    return (1.0f0 / maximum(ops.fₒ)) - 1.0f0
 end
 
 function inherit_fitness!(opt::LEEA, ops::LEEAState)
